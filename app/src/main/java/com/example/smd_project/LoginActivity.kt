@@ -25,6 +25,7 @@ class LoginActivity : AppCompatActivity() {
     // Firebase
     private lateinit var auth: FirebaseAuth
     private lateinit var database: FirebaseDatabase
+    private var userRole: String = "customer" // default
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +37,10 @@ class LoginActivity : AppCompatActivity() {
         // Initialize Firebase
         auth = FirebaseAuth.getInstance()
         database = FirebaseDatabase.getInstance()
+
+        // Get user role from SharedPreferences
+        val sharedPref = getSharedPreferences("UserPrefs", MODE_PRIVATE)
+        userRole = sharedPref.getString("USER_ROLE", "customer") ?: "customer"
 
         // Initialize views
         etEmailPhone = findViewById(R.id.etEmailPhone)
@@ -73,7 +78,37 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun loginUser(email: String, password: String) {
-        // Show loading
+        // Check if admin credentials
+        if (userRole == "admin") {
+            if (email == "admin@complaint.com" && password == "123456") {
+                // Create a Firebase user for admin if doesn't exist, then login
+                btnLogin.isEnabled = false
+                btnLogin.text = "Logging in..."
+
+                auth.signInWithEmailAndPassword(email, password)
+                    .addOnSuccessListener {
+                        // Admin login successful with Firebase
+                        navigateToAdminDashboard()
+                    }
+                    .addOnFailureListener {
+                        // Admin account doesn't exist, create it
+                        auth.createUserWithEmailAndPassword(email, password)
+                            .addOnSuccessListener {
+                                navigateToAdminDashboard()
+                            }
+                            .addOnFailureListener { e ->
+                                btnLogin.isEnabled = true
+                                btnLogin.text = "Login"
+                                Toast.makeText(this, "Admin login failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                    }
+            } else {
+                Toast.makeText(this, "Invalid admin credentials", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // Customer login with Firebase
         btnLogin.isEnabled = false
         btnLogin.text = "Logging in..."
 
@@ -98,6 +133,14 @@ class LoginActivity : AppCompatActivity() {
                     ).show()
                 }
             }
+    }
+
+    private fun navigateToAdminDashboard() {
+        btnLogin.isEnabled = true
+        btnLogin.text = "Login"
+        val intent = Intent(this, AdminDashboardActivity::class.java)
+        startActivity(intent)
+        finish()
     }
 
     private fun fetchUserDataAndNavigate(userId: String) {

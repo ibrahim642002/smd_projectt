@@ -4,8 +4,8 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
-import com.example.smd_project.R
 
 class SplashActivity : AppCompatActivity() {
 
@@ -18,6 +18,10 @@ class SplashActivity : AppCompatActivity() {
         // Hide the action bar if present
         supportActionBar?.hide()
 
+        // Force the ImageView to scale properly
+        val imageView = findViewById<ImageView>(R.id.ivClipboard)
+        imageView.scaleType = ImageView.ScaleType.FIT_XY
+
         // Navigate to main activity after delay
         Handler(Looper.getMainLooper()).postDelayed({
             navigateToMain()
@@ -25,7 +29,7 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun navigateToMain() {
-        val intent = Intent(this, LoginActivity::class.java)
+        val intent = Intent(this, RoleSelectionActivity::class.java)
         startActivity(intent)
         finish()
     }

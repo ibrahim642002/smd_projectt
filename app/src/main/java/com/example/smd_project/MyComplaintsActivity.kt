@@ -5,6 +5,10 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.*
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MyComplaintsActivity : AppCompatActivity() {
 
@@ -23,16 +27,12 @@ class MyComplaintsActivity : AppCompatActivity() {
     private lateinit var navMyList: LinearLayout
     private lateinit var navProfile: LinearLayout
 
-    private var currentFilter = "All"
+    // Firebase
+    private lateinit var auth: FirebaseAuth
+    private lateinit var database: FirebaseDatabase
 
-    // TODO: This will be replaced with Firebase data
-    private val sampleComplaints = listOf(
-        Complaint("1", "Street Light Not Working", "Main Road, Block A", "Infrastructure", "In Progress", "#12345", "2 days ago"),
-        Complaint("2", "Garbage Collection Issue", "Park Street", "Cleanliness", "Pending", "#12344", "5 days ago"),
-        Complaint("3", "Road Repair Needed", "Highway Road", "Traffic", "Resolved", "#12343", "1 week ago"),
-        Complaint("4", "Water Supply Problem", "Residential Area", "Water", "Rejected", "#12342", "2 weeks ago"),
-        Complaint("5", "Broken Street Signboard", "City Center", "Safety", "Pending", "#12341", "3 weeks ago")
-    )
+    private var currentFilter = "All"
+    private var allComplaints = mutableListOf<Complaint>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,13 +41,17 @@ class MyComplaintsActivity : AppCompatActivity() {
         // Hide action bar
         supportActionBar?.hide()
 
+        // Initialize Firebase
+        auth = FirebaseAuth.getInstance()
+        database = FirebaseDatabase.getInstance()
+
         // Initialize views
         initializeViews()
 
         // Set up click listeners
         setupClickListeners()
 
-        // Load complaints (will be from Firebase later)
+        // Load complaints from Firebase
         loadComplaints()
     }
 
@@ -143,30 +147,77 @@ class MyComplaintsActivity : AppCompatActivity() {
             }
         }
 
-        // Reload complaints with filter
-        loadComplaints()
+        // Display filtered complaints
+        displayComplaints()
     }
 
     private fun loadComplaints() {
+        val currentUser = auth.currentUser
+        if (currentUser == null) {
+            tvNoComplaints.visibility = TextView.VISIBLE
+            return
+        }
+
+        val complaintsRef = database.getReference("complaints")
+        complaintsRef.orderByChild("userId").equalTo(currentUser.uid)
+            .addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    allComplaints.clear()
+
+                    for (complaintSnapshot in snapshot.children) {
+                        val id = complaintSnapshot.key ?: continue
+                        val title = complaintSnapshot.child("title").getValue(String::class.java) ?: ""
+                        val category = complaintSnapshot.child("category").getValue(String::class.java) ?: ""
+                        val location = complaintSnapshot.child("location").getValue(String::class.java) ?: ""
+                        val status = complaintSnapshot.child("status").getValue(String::class.java) ?: "Pending"
+                        val description = complaintSnapshot.child("description").getValue(String::class.java) ?: ""
+                        val createdAt = complaintSnapshot.child("createdAt").getValue(Long::class.java) ?: 0L
+
+                        allComplaints.add(
+                            Complaint(
+                                id, title, location, category, status,
+                                "#${id.take(6)}", getTimeAgo(createdAt), description, createdAt
+                            )
+                        )
+                    }
+
+                    // Sort by most recent
+                    allComplaints.sortByDescending { it.createdAt }
+
+                    // Update tab counts
+                    updateTabCounts()
+
+                    // Display complaints
+                    displayComplaints()
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Toast.makeText(this@MyComplaintsActivity, "Error: ${error.message}", Toast.LENGTH_SHORT).show()
+                }
+            })
+    }
+
+    private fun updateTabCounts() {
+        val allCount = allComplaints.size
+        val pendingCount = allComplaints.count { it.status == "Pending" || it.status == "In Progress" }
+        val resolvedCount = allComplaints.count { it.status == "Resolved" }
+
+        tabAll.text = "All ($allCount)"
+        tabPending.text = "Pending ($pendingCount)"
+        tabResolved.text = "Resolved ($resolvedCount)"
+    }
+
+    private fun displayComplaints() {
         // Clear existing complaints
         llComplaintsList.removeAllViews()
 
         // Filter complaints based on current filter
         val filteredComplaints = when (currentFilter) {
-            "All" -> sampleComplaints
-            "Pending" -> sampleComplaints.filter { it.status == "Pending" || it.status == "In Progress" }
-            "Resolved" -> sampleComplaints.filter { it.status == "Resolved" }
-            else -> sampleComplaints
+            "All" -> allComplaints
+            "Pending" -> allComplaints.filter { it.status == "Pending" || it.status == "In Progress" }
+            "Resolved" -> allComplaints.filter { it.status == "Resolved" }
+            else -> allComplaints
         }
-
-        // Update tab counts
-        val allCount = sampleComplaints.size
-        val pendingCount = sampleComplaints.count { it.status == "Pending" || it.status == "In Progress" }
-        val resolvedCount = sampleComplaints.count { it.status == "Resolved" }
-
-        tabAll.text = "All ($allCount)"
-        tabPending.text = "Pending ($pendingCount)"
-        tabResolved.text = "Resolved ($resolvedCount)"
 
         // Show/hide no complaints message
         if (filteredComplaints.isEmpty()) {
@@ -190,7 +241,7 @@ class MyComplaintsActivity : AppCompatActivity() {
         cardView.findViewById<TextView>(R.id.tvComplaintTitle).text = complaint.title
         cardView.findViewById<TextView>(R.id.tvLocation).text = complaint.location
         cardView.findViewById<TextView>(R.id.tvCategory).text = complaint.category
-        cardView.findViewById<TextView>(R.id.tvComplaintId).text = complaint.id
+        cardView.findViewById<TextView>(R.id.tvComplaintId).text = complaint.complaintId
         cardView.findViewById<TextView>(R.id.tvTimeAgo).text = complaint.timeAgo
 
         // Set status with appropriate background
@@ -213,17 +264,43 @@ class MyComplaintsActivity : AppCompatActivity() {
 
     private fun openComplaintDetails(complaint: Complaint) {
         val intent = Intent(this, ComplaintDetailsActivity::class.java)
-        intent.putExtra("COMPLAINT_ID", complaint.complaintId)
+        intent.putExtra("COMPLAINT_ID", complaint.id)
         intent.putExtra("COMPLAINT_TITLE", complaint.title)
         intent.putExtra("COMPLAINT_CATEGORY", complaint.category)
         intent.putExtra("COMPLAINT_LOCATION", complaint.location)
         intent.putExtra("COMPLAINT_STATUS", complaint.status)
-        intent.putExtra("COMPLAINT_DESCRIPTION", "Sample description for ${complaint.title}")
-        intent.putExtra("COMPLAINT_DATE", "Oct 1, 2025")
+        intent.putExtra("COMPLAINT_DESCRIPTION", complaint.description)
+        intent.putExtra("COMPLAINT_DATE", formatDate(complaint.createdAt))
         startActivity(intent)
     }
 
-    // TODO: This data class will be replaced with Firebase model
+    private fun getTimeAgo(timestamp: Long): String {
+        if (timestamp == 0L) return "Just now"
+
+        val now = System.currentTimeMillis()
+        val diff = now - timestamp
+
+        val seconds = diff / 1000
+        val minutes = seconds / 60
+        val hours = minutes / 60
+        val days = hours / 24
+        val weeks = days / 7
+
+        return when {
+            weeks > 0 -> "$weeks week${if (weeks > 1) "s" else ""} ago"
+            days > 0 -> "$days day${if (days > 1) "s" else ""} ago"
+            hours > 0 -> "$hours hour${if (hours > 1) "s" else ""} ago"
+            minutes > 0 -> "$minutes minute${if (minutes > 1) "s" else ""} ago"
+            else -> "Just now"
+        }
+    }
+
+    private fun formatDate(timestamp: Long): String {
+        if (timestamp == 0L) return "Unknown"
+        val sdf = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+        return sdf.format(Date(timestamp))
+    }
+
     data class Complaint(
         val id: String,
         val title: String,
@@ -231,6 +308,8 @@ class MyComplaintsActivity : AppCompatActivity() {
         val category: String,
         val status: String,
         val complaintId: String,
-        val timeAgo: String
+        val timeAgo: String,
+        val description: String,
+        val createdAt: Long
     )
 }

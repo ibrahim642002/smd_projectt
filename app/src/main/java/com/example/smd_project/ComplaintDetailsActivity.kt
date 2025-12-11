@@ -81,7 +81,6 @@ class ComplaintDetailsActivity : AppCompatActivity() {
         }
 
         btnMenu.setOnClickListener {
-            // TODO: Show menu options (Edit, Delete, Share, etc.)
             Toast.makeText(this, "Menu options - Coming Soon", Toast.LENGTH_SHORT).show()
         }
     }

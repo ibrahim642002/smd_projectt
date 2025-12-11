@@ -1,14 +1,21 @@
 package com.example.smd_project
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
+import android.util.Base64
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 class SubmitComplaintActivity : AppCompatActivity() {
 
@@ -47,6 +54,8 @@ class SubmitComplaintActivity : AppCompatActivity() {
     )
 
     private var selectedCategory: String = ""
+    private var selectedImageUri: Uri? = null
+    private val PICK_IMAGE_REQUEST = 1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,7 +113,7 @@ class SubmitComplaintActivity : AppCompatActivity() {
 
         // Attach media
         rlAttachMedia.setOnClickListener {
-            Toast.makeText(this, "Upload Photos/Videos - Coming Soon", Toast.LENGTH_SHORT).show()
+            openImagePicker()
         }
 
         // Submit button
@@ -149,6 +158,20 @@ class SubmitComplaintActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun openImagePicker() {
+        val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        startActivityForResult(intent, PICK_IMAGE_REQUEST)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == PICK_IMAGE_REQUEST && resultCode == Activity.RESULT_OK && data != null) {
+            selectedImageUri = data.data
+            Toast.makeText(this, "Image selected successfully", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun submitComplaint() {
         val title = etComplaintTitle.text.toString().trim()
         val description = etDescription.text.toString().trim()
@@ -184,24 +207,64 @@ class SubmitComplaintActivity : AppCompatActivity() {
         btnSubmitComplaint.isEnabled = false
         btnSubmitComplaint.text = "Submitting..."
 
-        // Create complaint data
+        // Upload image if selected
+        if (selectedImageUri != null) {
+            uploadImageAndSubmitComplaint(currentUser.uid, title, description, location, isAnonymous)
+        } else {
+            submitComplaintToDatabase(currentUser.uid, title, description, location, isAnonymous, null)
+        }
+    }
+
+    private fun uploadImageAndSubmitComplaint(
+        userId: String,
+        title: String,
+        description: String,
+        location: String,
+        isAnonymous: Boolean
+    ) {
+        try {
+            val bitmap = MediaStore.Images.Media.getBitmap(contentResolver, selectedImageUri)
+
+            // Compress and convert to Base64
+            val outputStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
+            val byteArray = outputStream.toByteArray()
+            val base64Image = Base64.encodeToString(byteArray, Base64.DEFAULT)
+
+            // Submit complaint with base64 image
+            submitComplaintToDatabase(userId, title, description, location, isAnonymous, base64Image)
+
+        } catch (e: Exception) {
+            btnSubmitComplaint.isEnabled = true
+            btnSubmitComplaint.text = "Submit Complaint"
+            Toast.makeText(this, "Failed to process image: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun submitComplaintToDatabase(
+        userId: String,
+        title: String,
+        description: String,
+        location: String,
+        isAnonymous: Boolean,
+        base64Image: String?
+    ) {
         val complaintRef = database.getReference("complaints").push()
         val complaintId = complaintRef.key ?: return
 
         val complaintData = hashMapOf(
-            "userId" to currentUser.uid,
+            "userId" to userId,
             "title" to title,
             "category" to selectedCategory,
             "description" to description,
             "location" to location,
             "status" to "Pending",
             "isAnonymous" to isAnonymous,
-            "imageUrls" to emptyList<String>(),
+            "imageBase64" to (base64Image ?: ""),
             "createdAt" to ServerValue.TIMESTAMP,
             "updatedAt" to ServerValue.TIMESTAMP
         )
 
-        // Save complaint
         complaintRef.setValue(complaintData)
             .addOnSuccessListener {
                 // Create initial history entry
@@ -214,9 +277,11 @@ class SubmitComplaintActivity : AppCompatActivity() {
 
                 historyRef.setValue(historyData)
                     .addOnSuccessListener {
+                        // Save to local storage
+                        saveComplaintLocally(complaintId, title, selectedCategory, description)
+
                         Toast.makeText(this, "Complaint submitted successfully!", Toast.LENGTH_SHORT).show()
 
-                        // Navigate back to home
                         val intent = Intent(this, MainActivity::class.java)
                         startActivity(intent)
                         finish()
@@ -227,5 +292,14 @@ class SubmitComplaintActivity : AppCompatActivity() {
                 btnSubmitComplaint.text = "Submit Complaint"
                 Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+    }
+
+    private fun saveComplaintLocally(complaintId: String, title: String, category: String, description: String) {
+        val sharedPref = getSharedPreferences("LocalComplaints", MODE_PRIVATE)
+        val editor = sharedPref.edit()
+
+        // Store complaint data locally
+        editor.putString("complaint_$complaintId", "$title|$category|$description|${System.currentTimeMillis()}")
+        editor.apply()
     }
 }
