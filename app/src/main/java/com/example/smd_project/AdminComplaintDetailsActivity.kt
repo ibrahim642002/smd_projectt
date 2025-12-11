@@ -1,10 +1,20 @@
 package com.example.smd_project
 
 import android.app.AlertDialog
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Base64
+import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.database.*
+import com.google.firebase.messaging.FirebaseMessaging
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 class AdminComplaintDetailsActivity : AppCompatActivity() {
 
@@ -18,6 +28,7 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
     private lateinit var tvUserName: TextView
     private lateinit var tvUserEmail: TextView
     private lateinit var tvDescription: TextView
+    private lateinit var ivComplaintImage: ImageView
     private lateinit var btnUpdateStatus: Button
     private lateinit var btnAddNote: Button
     private lateinit var btnMarkResolved: Button
@@ -43,7 +54,13 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
         initializeViews()
 
         // Get data from intent
-        loadComplaintData()
+        complaintId = intent.getStringExtra("COMPLAINT_ID") ?: ""
+
+        if (complaintId.isNotEmpty()) {
+            loadComplaintFromFirebase()
+        } else {
+            loadComplaintData()
+        }
 
         // Set up click listeners
         setupClickListeners()
@@ -60,13 +77,59 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
         tvUserName = findViewById(R.id.tvUserName)
         tvUserEmail = findViewById(R.id.tvUserEmail)
         tvDescription = findViewById(R.id.tvDescription)
+        ivComplaintImage = findViewById(R.id.ivComplaintImage)
         btnUpdateStatus = findViewById(R.id.btnUpdateStatus)
         btnAddNote = findViewById(R.id.btnAddNote)
         btnMarkResolved = findViewById(R.id.btnMarkResolved)
     }
 
+    private fun loadComplaintFromFirebase() {
+        database.getReference("complaints").child(complaintId)
+            .addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    if (snapshot.exists()) {
+                        userId = snapshot.child("userId").getValue(String::class.java) ?: ""
+                        val title = snapshot.child("title").getValue(String::class.java) ?: "N/A"
+                        val category = snapshot.child("category").getValue(String::class.java) ?: "N/A"
+                        val location = snapshot.child("location").getValue(String::class.java) ?: "N/A"
+                        currentStatus = snapshot.child("status").getValue(String::class.java) ?: "Pending"
+                        val description = snapshot.child("description").getValue(String::class.java) ?: "No description available."
+                        val imageBase64 = snapshot.child("imageBase64").getValue(String::class.java) ?: ""
+                        val createdAt = snapshot.child("createdAt").getValue(Long::class.java) ?: 0L
+
+                        // Set data
+                        tvComplaintTitle.text = title
+                        tvComplaintId.text = "ID: #${complaintId.take(8)}"
+                        tvCategory.text = "Category: $category"
+                        tvLocation.text = "Location: $location"
+                        tvSubmittedDate.text = "Submitted: ${formatDate(createdAt)}"
+                        tvDescription.text = description
+
+                        // Set status badge
+                        tvStatusBadge.text = currentStatus
+                        updateStatusBadgeColor(currentStatus)
+
+                        // Display image if available
+                        if (imageBase64.isNotEmpty()) {
+                            displayImage(imageBase64)
+                        } else {
+                            ivComplaintImage.visibility = View.GONE
+                        }
+
+                        // Fetch user details
+                        if (userId.isNotEmpty()) {
+                            fetchUserDetails(userId)
+                        }
+                    }
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Toast.makeText(this@AdminComplaintDetailsActivity, "Error loading complaint", Toast.LENGTH_SHORT).show()
+                }
+            })
+    }
+
     private fun loadComplaintData() {
-        complaintId = intent.getStringExtra("COMPLAINT_ID") ?: ""
         userId = intent.getStringExtra("USER_ID") ?: ""
         val title = intent.getStringExtra("COMPLAINT_TITLE") ?: "N/A"
         val category = intent.getStringExtra("COMPLAINT_CATEGORY") ?: "N/A"
@@ -75,25 +138,44 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
         val description = intent.getStringExtra("COMPLAINT_DESCRIPTION") ?: "No description available."
         val date = intent.getStringExtra("COMPLAINT_DATE") ?: "N/A"
 
-        // Set data
         tvComplaintTitle.text = title
-        tvComplaintId.text = "ID: #${complaintId.take(6)}"
+        tvComplaintId.text = "ID: #${complaintId.take(8)}"
         tvCategory.text = "Category: $category"
         tvLocation.text = "Location: $location"
         tvSubmittedDate.text = "Submitted: $date"
         tvDescription.text = description
-
-        // Set status badge
         tvStatusBadge.text = currentStatus
-        when (currentStatus) {
+        updateStatusBadgeColor(currentStatus)
+
+        if (userId.isNotEmpty()) {
+            fetchUserDetails(userId)
+        }
+    }
+
+    private fun displayImage(base64String: String) {
+        try {
+            val decodedBytes = Base64.decode(base64String, Base64.DEFAULT)
+            val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+
+            if (bitmap != null) {
+                ivComplaintImage.setImageBitmap(bitmap)
+                ivComplaintImage.visibility = View.VISIBLE
+            } else {
+                ivComplaintImage.visibility = View.GONE
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ivComplaintImage.visibility = View.GONE
+        }
+    }
+
+    private fun updateStatusBadgeColor(status: String) {
+        when (status) {
             "Pending" -> tvStatusBadge.setBackgroundResource(R.drawable.status_badge_transparent)
             "In Progress" -> tvStatusBadge.setBackgroundResource(R.drawable.status_badge_transparent)
             "Resolved" -> tvStatusBadge.setBackgroundResource(R.drawable.status_badge_transparent)
             "Rejected" -> tvStatusBadge.setBackgroundResource(R.drawable.status_badge_transparent)
         }
-
-        // Fetch user details
-        fetchUserDetails(userId)
     }
 
     private fun fetchUserDetails(userId: String) {
@@ -144,6 +226,7 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
     private fun showAddNoteDialog() {
         val input = EditText(this)
         input.hint = "Enter admin note..."
+        input.setPadding(50, 30, 50, 30)
 
         AlertDialog.Builder(this)
             .setTitle("Add Note")
@@ -152,6 +235,8 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
                 val note = input.text.toString().trim()
                 if (note.isNotEmpty()) {
                     addAdminNote(note)
+                } else {
+                    Toast.makeText(this, "Note cannot be empty", Toast.LENGTH_SHORT).show()
                 }
                 dialog.dismiss()
             }
@@ -171,14 +256,19 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
             .addOnSuccessListener {
                 currentStatus = newStatus
                 tvStatusBadge.text = newStatus
+                updateStatusBadgeColor(newStatus)
 
                 // Add to history
                 addToHistory(newStatus, "Status updated by admin")
 
                 Toast.makeText(this, "Status updated to $newStatus", Toast.LENGTH_SHORT).show()
 
-                // TODO: Send push notification to user
-                sendNotificationToUser(userId, "Your complaint status has been updated to $newStatus")
+                // Send push notification to user
+                sendPushNotification(
+                    userId,
+                    "Complaint Status Updated",
+                    "Your complaint status has been updated to $newStatus"
+                )
             }
             .addOnFailureListener {
                 Toast.makeText(this, "Failed to update status", Toast.LENGTH_SHORT).show()
@@ -196,6 +286,13 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
             .child("adminNotes").push().setValue(noteData)
             .addOnSuccessListener {
                 Toast.makeText(this, "Note added successfully", Toast.LENGTH_SHORT).show()
+
+                // Send notification to user about the note
+                sendPushNotification(
+                    userId,
+                    "Admin Note Added",
+                    "Admin has added a note to your complaint"
+                )
             }
             .addOnFailureListener {
                 Toast.makeText(this, "Failed to add note", Toast.LENGTH_SHORT).show()
@@ -213,11 +310,81 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
             .child("history").push().setValue(historyData)
     }
 
-    private fun sendNotificationToUser(userId: String, message: String) {
-        // TODO: Implement FCM push notification
-        // For now, just create a notification record in database
+    private fun sendPushNotification(targetUserId: String, title: String, message: String) {
+        // Step 1: Get user's FCM token from database
+        database.getReference("users").child(targetUserId).child("fcmToken")
+            .get()
+            .addOnSuccessListener { snapshot ->
+                val fcmToken = snapshot.getValue(String::class.java)
+
+                if (fcmToken != null && fcmToken.isNotEmpty()) {
+                    // Step 2: Send FCM notification using HTTP request
+                    Thread {
+                        sendFCMNotification(fcmToken, title, message)
+                    }.start()
+                } else {
+                    // Fallback: Store notification in database
+                    storeNotificationInDatabase(targetUserId, title, message)
+                }
+            }
+            .addOnFailureListener {
+                // Fallback: Store notification in database
+                storeNotificationInDatabase(targetUserId, title, message)
+            }
+    }
+
+    private fun sendFCMNotification(fcmToken: String, title: String, message: String) {
+        try {
+            val url = URL("https://fcm.googleapis.com/fcm/send")
+            val connection = url.openConnection() as HttpURLConnection
+
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Authorization", "key=YOUR_SERVER_KEY") // TODO: Add your FCM server key
+            connection.doOutput = true
+
+            val jsonBody = JSONObject()
+            jsonBody.put("to", fcmToken)
+
+            val notification = JSONObject()
+            notification.put("title", title)
+            notification.put("body", message)
+            notification.put("sound", "default")
+
+            val data = JSONObject()
+            data.put("complaintId", complaintId)
+            data.put("type", "status_update")
+
+            jsonBody.put("notification", notification)
+            jsonBody.put("data", data)
+            jsonBody.put("priority", "high")
+
+            val writer = OutputStreamWriter(connection.outputStream)
+            writer.write(jsonBody.toString())
+            writer.flush()
+            writer.close()
+
+            val responseCode = connection.responseCode
+            if (responseCode == 200) {
+                runOnUiThread {
+                    // Notification sent successfully
+                }
+            }
+
+            connection.disconnect()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Fallback to database notification
+            runOnUiThread {
+                storeNotificationInDatabase(userId, title, message)
+            }
+        }
+    }
+
+    private fun storeNotificationInDatabase(targetUserId: String, title: String, message: String) {
         val notificationData = hashMapOf(
-            "userId" to userId,
+            "userId" to targetUserId,
+            "title" to title,
             "message" to message,
             "complaintId" to complaintId,
             "timestamp" to ServerValue.TIMESTAMP,
@@ -225,5 +392,14 @@ class AdminComplaintDetailsActivity : AppCompatActivity() {
         )
 
         database.getReference("notifications").push().setValue(notificationData)
+            .addOnSuccessListener {
+                Toast.makeText(this, "Notification sent", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun formatDate(timestamp: Long): String {
+        if (timestamp == 0L) return "Unknown"
+        val sdf = java.text.SimpleDateFormat("MMM dd, yyyy 'at' hh:mm a", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestamp))
     }
 }

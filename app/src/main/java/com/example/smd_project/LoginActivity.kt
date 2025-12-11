@@ -12,6 +12,7 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
+import com.google.firebase.messaging.FirebaseMessaging
 
 class LoginActivity : AppCompatActivity() {
 
@@ -88,13 +89,13 @@ class LoginActivity : AppCompatActivity() {
                 auth.signInWithEmailAndPassword(email, password)
                     .addOnSuccessListener {
                         // Admin login successful with Firebase
-                        navigateToAdminDashboard()
+                        getFCMTokenAndNavigate(true)
                     }
                     .addOnFailureListener {
                         // Admin account doesn't exist, create it
                         auth.createUserWithEmailAndPassword(email, password)
                             .addOnSuccessListener {
-                                navigateToAdminDashboard()
+                                getFCMTokenAndNavigate(true)
                             }
                             .addOnFailureListener { e ->
                                 btnLogin.isEnabled = true
@@ -114,23 +115,53 @@ class LoginActivity : AppCompatActivity() {
 
         auth.signInWithEmailAndPassword(email, password)
             .addOnCompleteListener(this) { task ->
-                btnLogin.isEnabled = true
-                btnLogin.text = "Login"
-
                 if (task.isSuccessful) {
                     // Login successful
                     val user = auth.currentUser
                     if (user != null) {
-                        // Fetch user data from Realtime Database
-                        fetchUserDataAndNavigate(user.uid)
+                        // Get FCM token and fetch user data
+                        getFCMTokenAndNavigate(false)
                     }
                 } else {
+                    btnLogin.isEnabled = true
+                    btnLogin.text = "Login"
                     // Login failed
                     Toast.makeText(
                         this,
                         "Login failed: ${task.exception?.message}",
                         Toast.LENGTH_SHORT
                     ).show()
+                }
+            }
+    }
+
+    private fun getFCMTokenAndNavigate(isAdmin: Boolean) {
+        // Get FCM token
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val token = task.result
+                saveFCMToken(token, isAdmin)
+            } else {
+                // Continue without FCM token
+                if (isAdmin) {
+                    navigateToAdminDashboard()
+                } else {
+                    fetchUserDataAndNavigate(auth.currentUser?.uid ?: "")
+                }
+            }
+        }
+    }
+
+    private fun saveFCMToken(token: String, isAdmin: Boolean) {
+        val userId = auth.currentUser?.uid ?: return
+
+        database.getReference("users").child(userId).child("fcmToken").setValue(token)
+            .addOnCompleteListener {
+                // Navigate regardless of success
+                if (isAdmin) {
+                    navigateToAdminDashboard()
+                } else {
+                    fetchUserDataAndNavigate(userId)
                 }
             }
     }
